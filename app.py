@@ -1,7 +1,6 @@
 # movie_recommendation_app.py
-# Full final single-file Streamlit app with 5 recommendation cards stretched to full width
-# Uses local fallback poster at: /mnt/data/419a744f-467f-4a19-bd76-1f24c28dbdc5.png
-# Save as a .py and run: streamlit run movie_recommendation_app.py
+# Full final single-file Streamlit app with robust recommend() and local fallback poster
+# Save and run: streamlit run movie_recommendation_app.py
 
 import streamlit as st
 import pickle
@@ -10,16 +9,17 @@ import requests
 import base64
 from typing import Optional
 from textwrap import dedent
+import math
 
 # --------------------------
 # Config / Constants
 # --------------------------
-BG_IMAGE_PATH = "bg_image.jpg"  # optional background image
+BG_IMAGE_PATH = "bg_image.jpg"  # optional background image (ignored if missing)
 MOVIE_DICT_PATH = "movie_dict.pkl"
 SIMILARITY_PATH = "similarity.pkl"
 TMDB_API_KEY = "c8f3eaf00fb09a1a9ced6e0a7328eff6"  # move to env var if required
 PLACEHOLDER = "https://via.placeholder.com/300x450?text=No+Image"
-# Developer-provided local fallback poster (uploaded)
+# Developer-provided local fallback poster (uploaded). Keep exactly this path in your project.
 LOCAL_FALLBACK_POSTER = "/mnt/data/419a744f-467f-4a19-bd76-1f24c28dbdc5.png"
 
 st.set_page_config(page_title="Movie Recommendation System", layout="wide")
@@ -79,8 +79,7 @@ def set_background(image_path: str):
         """
         st.markdown(background_css, unsafe_allow_html=True)
     except FileNotFoundError:
-        # If background image missing, silently continue without custom bg
-        # (Avoid spamming UI with repeated warnings)
+        # If background image missing, continue silently
         pass
 
 
@@ -111,9 +110,7 @@ else:
     if "title" not in movies.columns:
         movies["title"] = movies.index.astype(str)
     if "movie_id" not in movies.columns:
-        # Add movie_id column with None if not present
         movies["movie_id"] = None
-
 
 # --------------------------
 # TMDB fetch helpers (cached)
@@ -221,6 +218,27 @@ def fetch_youtube_trailer_url(movie_id: Optional[int], title: str) -> str:
 
 
 # --------------------------
+# Diagnostics (visible in app if mismatch)
+# --------------------------
+def check_alignment():
+    """Return (len_movies, len_similarity_row) and a short message if mismatch."""
+    if similarity is None:
+        return len(movies), None, "similarity matrix not found"
+    try:
+        # handle similarity as numpy array, list of lists, or other
+        l = len(similarity)
+    except Exception:
+        l = None
+    msg = ""
+    if l is not None and l != len(movies):
+        msg = f"Warning: length mismatch — movies: {len(movies)} vs similarity: {l}"
+    return len(movies), l, msg
+
+
+len_movies, len_sim, diag_msg = check_alignment()
+
+
+# --------------------------
 # Top header and three featured movies
 # --------------------------
 st.markdown(
@@ -233,12 +251,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+if diag_msg:
+    st.warning(diag_msg)
+
+
 # pick up to 3 random movies (safe)
 if movies is None or movies.empty:
     top_movies = pd.DataFrame([{"title": "No Movie Available", "movie_id": None}] * 3)
 else:
     n = min(3, len(movies))
-    top_movies = movies.sample(n).reset_index(drop=True)
+    # sample safe even if single row
+    try:
+        top_movies = movies.sample(n).reset_index(drop=True)
+    except Exception:
+        top_movies = movies.head(n).reset_index(drop=True)
     if len(top_movies) < 3:
         missing = 3 - len(top_movies)
         padding = pd.DataFrame([{"title": "No Movie Available", "movie_id": None}] * missing)
@@ -265,7 +291,7 @@ for i, col in enumerate(cols):
     providers_text = format_providers_text(providers)
 
     poster_url = fetch_poster_from_tmdb(movie_id)
-    if poster_url == PLACEHOLDER:
+    if not poster_url or poster_url == PLACEHOLDER:
         poster_url = LOCAL_FALLBACK_POSTER
 
     trailer_url = fetch_youtube_trailer_url(movie_id, title)
@@ -288,18 +314,16 @@ for i, col in enumerate(cols):
 
 
 # --------------------------
-# Recommendation UI (final: 5 cards cover full width)
+# Recommendation UI and CSS
 # --------------------------
-
-# CSS updated so 5 cards exactly fill the width (responsive)
 st.markdown(
     """
 <style>
 .rec-row {
     width: 100%;
     display: flex;
-    justify-content: space-between;   /* distribute items across full width */
-    gap: 0px;                          /* remove extra gaps so 5 fit perfectly */
+    justify-content: space-between;
+    gap: 0px;
     flex-wrap: nowrap;
     padding: 15px 0;
     box-sizing: border-box;
@@ -309,14 +333,14 @@ st.markdown(
     background: rgba(0,0,0,0.65);
     border-radius: 12px;
     padding: 12px;
-    width: 19%;                        /* Approximately 5 cards fit across (5 * 19% + gaps) */
+    width: 19%;
     box-shadow: 0 6px 18px rgba(0,0,0,0.6);
     color: #fff;
     display: flex;
     flex-direction: column;
     align-items: center;
     box-sizing: border-box;
-    min-height: 520px;                 /* keep cards visually consistent height */
+    min-height: 520px;
 }
 
 .rec-poster {
@@ -377,37 +401,84 @@ st.markdown(
 )
 
 
+# --------------------------
+# Robust recommend() function (REPLACED)
+# --------------------------
 def recommend(movie: str):
-    """Return list of 5 recommended titles and poster URLs (best-effort)."""
-    if similarity is None or movies is None:
+    """Return list of up to 5 recommended titles and poster URLs (best-effort)."""
+    if similarity is None or movies is None or movies.empty:
         return [], []
+
+    # locate movie index (exact match) - be defensive
     try:
-        movie_index = movies[movies["title"] == movie].index[0]
-    except Exception:
-        return [], []
-    try:
-        distances = similarity[movie_index]
-        movies_list = sorted(list(enumerate(distances)), reverse=True, key=lambda x: x[1])[1:6]
+        idxs = movies.index[movies["title"] == movie].tolist()
+        if not idxs:
+            return [], []
+        movie_index = idxs[0]
     except Exception:
         return [], []
 
+    # Extract similarity row carefully
+    try:
+        row = similarity[movie_index]
+        # If row is 2D or wrapped, flatten possibilities
+        # Common shapes: list, numpy 1D, numpy 2D (1,N)
+        # If row itself is a list/iterable of length 1 containing the real row, handle that:
+        if (hasattr(row, "__len__") and len(row) == len(movies)) or (isinstance(row, (list, tuple))):
+            distances = list(enumerate(row))
+        else:
+            # Try to index row[0] if it's a single-row container
+            try:
+                inner = row[0]
+                distances = list(enumerate(inner))
+            except Exception:
+                # last resort: try converting to list
+                distances = list(enumerate(list(row)))
+    except Exception:
+        return [], []
+
+    # Filter out invalid scores (None, NaN) and ensure numeric
+    cleaned = []
+    for i, s in distances:
+        try:
+            if s is None:
+                continue
+            # convert to float if possible
+            val = float(s)
+            if math.isnan(val):
+                continue
+            cleaned.append((i, val))
+        except Exception:
+            continue
+
+    # sort descending by score
+    cleaned = sorted(cleaned, key=lambda x: x[1], reverse=True)
+
+    # remove the seed movie and take up to 5
+    cleaned = [t for t in cleaned if t[0] != movie_index]
+    top_n = cleaned[:5]
+
     rec_titles = []
     rec_posters = []
-    for i in movies_list:
-        idx = i[0]
-        title = movies.iloc[idx]["title"]
+    for idx, score in top_n:
+        if idx < 0 or idx >= len(movies):
+            continue
+        title = movies.iloc[idx].get("title", f"Movie {idx}")
         rec_titles.append(title)
-        movie_id = movies.iloc[idx].get("movie_id", None)
+
+        movie_id = movies.iloc[idx].get("movie_id", None) if "movie_id" in movies.columns else None
         poster = fetch_poster_from_tmdb(movie_id)
-        # if poster returns placeholder, use local fallback
-        if poster == PLACEHOLDER:
+        if not poster or poster == PLACEHOLDER:
             poster = LOCAL_FALLBACK_POSTER
         rec_posters.append(poster)
+
     return rec_titles, rec_posters
 
 
 # Recommendation controls
-selected_movie_name = st.selectbox("Select a movie to get recommendations", movies["title"].values)
+# Use unique titles list for selectbox to avoid duplicates confusing the lookup
+unique_titles = movies["title"].fillna("").astype(str).tolist()
+selected_movie_name = st.selectbox("Select a movie to get recommendations", unique_titles)
 
 if st.button("Recommend"):
     names, posters = recommend(selected_movie_name)
@@ -437,8 +508,7 @@ if st.button("Recommend"):
             poster_url = posters[idx] if idx < len(posters) else LOCAL_FALLBACK_POSTER
             trailer_url = fetch_youtube_trailer_url(rec_movie_id, name)
 
-            # Use dedent so no leading spaces remain in final HTML
-            card_html = dedent(f"""\
+            card_html = dedent(f"""\ 
             <div class="rec-card">
                 <a class="rec-link" href="{trailer_url}" target="_blank" rel="noopener noreferrer">
                     <img class="rec-poster" src="{poster_url}" alt="poster">
@@ -454,3 +524,4 @@ if st.button("Recommend"):
         card_pieces.append("</div>")
         cards_html = "\n".join(card_pieces)
         st.markdown(cards_html, unsafe_allow_html=True)
+
