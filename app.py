@@ -75,12 +75,60 @@ def set_background(image_path: str):
             font-size: 0.8rem;
             margin-top: 6px;
         }}
+
+        /* Recommendation card styles only; layout is handled by Streamlit container */
+        .rec-card {{
+            background: rgba(0,0,0,0.65);
+            border-radius: 12px;
+            padding: 12px;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.6);
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            box-sizing: border-box;
+            min-height: 520px;
+        }}
+
+        .rec-poster {{
+            width: 100%;
+            height: 300px;
+            object-fit: cover;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }}
+
+        .rec-title {{
+            font-weight: 700;
+            margin: 6px 0 4px 0;
+            text-align: center;
+            font-size: 1rem;
+        }}
+
+        .rec-meta {{
+            font-size: 0.85rem;
+            opacity: 0.92;
+            text-align: center;
+            margin-bottom: 6px;
+        }}
+
+        .rec-overview {{
+            font-size: 0.78rem;
+            opacity: 0.9;
+            text-align: left;
+            max-height: 100px;
+            overflow: hidden;
+            width: 100%;
+        }}
+
+        .rec-link {{
+            text-decoration: none;
+            color: inherit;
+        }}
         </style>
         """
         st.markdown(background_css, unsafe_allow_html=True)
     except FileNotFoundError:
-        # If background image missing, silently continue without custom bg
-        # (Avoid spamming UI with repeated warnings)
         pass
 
 
@@ -98,13 +146,12 @@ def safe_load_pickle(path: str) -> Optional[object]:
     except Exception:
         return None
 
-
 movies_dict = safe_load_pickle(MOVIE_DICT_PATH)
 similarity = safe_load_pickle(SIMILARITY_PATH)
 
 if movies_dict is None:
     # fallback small dataframe so UI won't crash (3 placeholder rows)
-    movies = pd.DataFrame([{"title": "No Movie Available", "movie_id": None}] * 3)
+    movies = pd.DataFrame([{ "title": "No Movie Available", "movie_id": None}] * 3)
 else:
     movies = pd.DataFrame(movies_dict)
     # Ensure minimal required columns exist
@@ -134,7 +181,6 @@ def fetch_movie_details(movie_id: Optional[int]) -> dict:
     except Exception:
         return {}
 
-
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_poster_from_tmdb(movie_id: Optional[int]) -> str:
     if not movie_id:
@@ -145,7 +191,6 @@ def fetch_poster_from_tmdb(movie_id: Optional[int]) -> str:
         return "https://image.tmdb.org/t/p/w500" + poster_path if poster_path else PLACEHOLDER
     except Exception:
         return PLACEHOLDER
-
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_watch_providers(movie_id: Optional[int], country_code: str = "IN") -> dict:
@@ -235,13 +280,13 @@ st.markdown(
 
 # pick up to 3 random movies (safe)
 if movies is None or movies.empty:
-    top_movies = pd.DataFrame([{"title": "No Movie Available", "movie_id": None}] * 3)
+    top_movies = pd.DataFrame([{ "title": "No Movie Available", "movie_id": None}] * 3)
 else:
     n = min(3, len(movies))
     top_movies = movies.sample(n).reset_index(drop=True)
     if len(top_movies) < 3:
         missing = 3 - len(top_movies)
-        padding = pd.DataFrame([{"title": "No Movie Available", "movie_id": None}] * missing)
+        padding = pd.DataFrame([{ "title": "No Movie Available", "movie_id": None}] * missing)
         top_movies = pd.concat([top_movies, padding], ignore_index=True)
 
 col1, col2, col3 = st.columns(3)
@@ -288,95 +333,8 @@ for i, col in enumerate(cols):
 
 
 # --------------------------
-# Recommendation UI (final: 5 cards cover full width)
+# Recommendation logic
 # --------------------------
-
-# CSS updated so 5 cards exactly fill the width (responsive)
-st.markdown(
-    """
-<style>
-.rec-row {
-    width: 100%;
-    display: flex;
-    justify-content: space-between;   /* distribute items across full width */
-    gap: 0px;                          /* remove extra gaps so 5 fit perfectly */
-    flex-wrap: nowrap;
-    padding: 15px 0;
-    box-sizing: border-box;
-}
-
-.rec-card {
-    background: rgba(0,0,0,0.65);
-    border-radius: 12px;
-    padding: 12px;
-    width: 19%;                        /* Approximately 5 cards fit across (5 * 19% + gaps) */
-    box-shadow: 0 6px 18px rgba(0,0,0,0.6);
-    color: #fff;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    box-sizing: border-box;
-    min-height: 520px;                 /* keep cards visually consistent height */
-}
-
-.rec-poster {
-    width: 100%;
-    height: 300px;
-    object-fit: cover;
-    border-radius: 8px;
-    margin-bottom: 10px;
-}
-
-.rec-title {
-    font-weight: 700;
-    margin: 6px 0 4px 0;
-    text-align: center;
-    font-size: 1rem;
-}
-
-.rec-meta {
-    font-size: 0.85rem;
-    opacity: 0.92;
-    text-align: center;
-    margin-bottom: 6px;
-}
-
-.rec-overview {
-    font-size: 0.78rem;
-    opacity: 0.9;
-    text-align: left;
-    max-height: 100px;
-    overflow: hidden;
-    width: 100%;
-}
-
-.rec-link {
-    text-decoration: none;
-    color: inherit;
-}
-
-/* Mobile responsive */
-@media (max-width: 1200px) {
-    .rec-card { width: 30%; min-height: 480px; }
-}
-@media (max-width: 900px) {
-    .rec-row {
-        overflow-x: auto;
-        padding-bottom: 8px;
-    }
-    .rec-card {
-        min-width: 200px;
-        width: 200px;
-        flex: 0 0 auto;
-        min-height: 420px;
-    }
-}
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
-
 def recommend(movie: str):
     """Return list of 5 recommended titles and poster URLs (best-effort)."""
     if similarity is None or movies is None:
@@ -406,7 +364,9 @@ def recommend(movie: str):
     return rec_titles, rec_posters
 
 
-# Recommendation controls
+# --------------------------
+# Recommendation controls + 5-card layout
+# --------------------------
 selected_movie_name = st.selectbox("Select a movie to get recommendations", movies["title"].values)
 
 if st.button("Recommend"):
@@ -414,8 +374,9 @@ if st.button("Recommend"):
     if not names:
         st.info("No recommendations available.")
     else:
-        # Build HTML pieces WITHOUT leading spaces so Markdown doesn't treat as code block
-        card_pieces = ['<div class="rec-row">']
+        # Use Streamlit columns to render five cards across the page
+        cols5 = st.columns(5)
+
         for idx, name in enumerate(names):
             rec_movie_id = None
             if "movie_id" in movies.columns and not movies[movies["title"] == name].empty:
@@ -437,9 +398,8 @@ if st.button("Recommend"):
             poster_url = posters[idx] if idx < len(posters) else LOCAL_FALLBACK_POSTER
             trailer_url = fetch_youtube_trailer_url(rec_movie_id, name)
 
-            # Use dedent so no leading spaces remain in final HTML
-            card_html = dedent(f"""\
-            <div class="rec-card">
+            card_html = dedent(f"""
+            <div class="rec-card" style="width: 100%; max-width: 230px;">
                 <a class="rec-link" href="{trailer_url}" target="_blank" rel="noopener noreferrer">
                     <img class="rec-poster" src="{poster_url}" alt="poster">
                 </a>
@@ -449,8 +409,8 @@ if st.button("Recommend"):
                 <div class="rec-overview">{overview_text}</div>
             </div>
             """)
-            card_pieces.append(card_html.strip())
 
-        card_pieces.append("</div>")
-        cards_html = "\n".join(card_pieces)
-        st.markdown(cards_html, unsafe_allow_html=True)
+            # Safely write into the corresponding column; if more than 5, fallback to last column
+            col = cols5[idx] if idx < len(cols5) else cols5[-1]
+            with col:
+                st.markdown(card_html, unsafe_allow_html=True)
