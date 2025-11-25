@@ -1,6 +1,7 @@
 # movie_recommendation_app.py
-# Full final single-file Streamlit app with 5 recommendation cards
+# Full final single-file Streamlit app with 5 recommendation cards stretched to full width
 # Uses local fallback poster at: /mnt/data/419a744f-467f-4a19-bd76-1f24c28dbdc5.png
+# Save as a .py and run: streamlit run movie_recommendation_app.py
 
 import streamlit as st
 import pickle
@@ -18,6 +19,7 @@ MOVIE_DICT_PATH = "movie_dict.pkl"
 SIMILARITY_PATH = "similarity.pkl"
 TMDB_API_KEY = "c8f3eaf00fb09a1a9ced6e0a7328eff6"  # move to env var if required
 PLACEHOLDER = "https://via.placeholder.com/300x450?text=No+Image"
+# Developer-provided local fallback poster (uploaded)
 LOCAL_FALLBACK_POSTER = "/mnt/data/419a744f-467f-4a19-bd76-1f24c28dbdc5.png"
 
 st.set_page_config(page_title="Movie Recommendation System", layout="wide")
@@ -73,57 +75,16 @@ def set_background(image_path: str):
             font-size: 0.8rem;
             margin-top: 6px;
         }}
-
-        .rec-card {{
-            background: rgba(0,0,0,0.65);
-            border-radius: 12px;
-            padding: 12px;
-            box-shadow: 0 6px 18px rgba(0,0,0,0.6);
-            color: #fff;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            box-sizing: border-box;
-            min-height: 520px;
-        }}
-        .rec-poster {{
-            width: 100%;
-            height: 300px;
-            object-fit: cover;
-            border-radius: 8px;
-            margin-bottom: 10px;
-        }}
-        .rec-title {{
-            font-weight: 700;
-            margin: 6px 0 4px 0;
-            text-align: center;
-            font-size: 1rem;
-        }}
-        .rec-meta {{
-            font-size: 0.85rem;
-            opacity: 0.92;
-            text-align: center;
-            margin-bottom: 6px;
-        }}
-        .rec-overview {{
-            font-size: 0.78rem;
-            opacity: 0.9;
-            text-align: left;
-            max-height: 100px;
-            overflow: hidden;
-            width: 100%;
-        }}
-        .rec-link {{
-            text-decoration: none;
-            color: inherit;
-        }}
         </style>
         """
         st.markdown(background_css, unsafe_allow_html=True)
     except FileNotFoundError:
+        # If background image missing, silently continue without custom bg
+        # (Avoid spamming UI with repeated warnings)
         pass
 
 
+# optional background — if file missing it will just be ignored
 set_background(BG_IMAGE_PATH)
 
 
@@ -142,20 +103,24 @@ movies_dict = safe_load_pickle(MOVIE_DICT_PATH)
 similarity = safe_load_pickle(SIMILARITY_PATH)
 
 if movies_dict is None:
+    # fallback small dataframe so UI won't crash (3 placeholder rows)
     movies = pd.DataFrame([{"title": "No Movie Available", "movie_id": None}] * 3)
 else:
     movies = pd.DataFrame(movies_dict)
+    # Ensure minimal required columns exist
     if "title" not in movies.columns:
         movies["title"] = movies.index.astype(str)
     if "movie_id" not in movies.columns:
+        # Add movie_id column with None if not present
         movies["movie_id"] = None
 
 
 # --------------------------
-# TMDB helpers
+# TMDB fetch helpers (cached)
 # --------------------------
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_movie_details(movie_id: Optional[int]) -> dict:
+    """Fetch full movie details from TMDB (vote_average, genres, overview)."""
     if not movie_id:
         return {}
     try:
@@ -184,6 +149,7 @@ def fetch_poster_from_tmdb(movie_id: Optional[int]) -> str:
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_watch_providers(movie_id: Optional[int], country_code: str = "IN") -> dict:
+    """Fetch watch providers (where to watch) for a movie in a specific region (default: India = IN)."""
     if not movie_id:
         return {}
     try:
@@ -195,27 +161,37 @@ def fetch_watch_providers(movie_id: Optional[int], country_code: str = "IN") -> 
         )
         data = resp.json() or {}
         results = data.get("results", {})
-        return results.get(country_code, {})
+        return results.get(country_code, {})  # e.g. 'IN'
     except Exception:
         return {}
 
 
 def format_providers_text(providers: dict) -> str:
+    """Convert providers dict into a short human-readable sentence."""
     if not providers:
         return "Availability info not found"
+
     flatrate = providers.get("flatrate", []) or []
     rent = providers.get("rent", []) or []
     buy = providers.get("buy", []) or []
+
     if flatrate:
         names = ", ".join(p.get("provider_name", "") for p in flatrate)
         return f"Streaming on: {names}"
     if rent or buy:
         return "Available to rent/buy online"
+
     return "Availability info not found"
 
 
 def fetch_youtube_trailer_url(movie_id: Optional[int], title: str) -> str:
+    """
+    Return a YouTube trailer URL for the TMDB movie_id.
+    Priority: YouTube site, type Trailer, name contains 'Official' if possible.
+    Fallback: a YouTube search query for the title + 'trailer'.
+    """
     if not movie_id:
+        # Fallback to search if no id
         q = requests.utils.quote(f"{title} trailer")
         return f"https://www.youtube.com/results?search_query={q}"
     try:
@@ -227,13 +203,19 @@ def fetch_youtube_trailer_url(movie_id: Optional[int], title: str) -> str:
         )
         data = resp.json() or {}
         results = data.get("results", []) or []
+
+        # Filter to YouTube trailers
         yt_trailers = [v for v in results if v.get("site") == "YouTube" and v.get("type") == "Trailer"]
-        official = [v for v in yt_trailers if "official" in (v.get("name", "").lower())]
-        pick = official[0] if official else (yt_trailers[0] if yt_trailers else (results[0] if results else None))
+        # Prefer "Official" in name if available
+        official = [v for v in yt_trailers if "official" in (v.get("name", "")).lower()]
+        pick = (official[0] if official else (yt_trailers[0] if yt_trailers else (results[0] if results else None)))
+
         if pick and pick.get("site") == "YouTube" and pick.get("key"):
             return f"https://www.youtube.com/watch?v={pick['key']}"
     except Exception:
         pass
+
+    # Final fallback: search by title
     q = requests.utils.quote(f"{title} trailer")
     return f"https://www.youtube.com/results?search_query={q}"
 
@@ -251,6 +233,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# pick up to 3 random movies (safe)
 if movies is None or movies.empty:
     top_movies = pd.DataFrame([{"title": "No Movie Available", "movie_id": None}] * 3)
 else:
@@ -305,9 +288,97 @@ for i, col in enumerate(cols):
 
 
 # --------------------------
-# Recommendation logic
+# Recommendation UI (final: 5 cards cover full width)
 # --------------------------
+
+# CSS updated so 5 cards exactly fill the width (responsive)
+st.markdown(
+    """
+<style>
+.rec-row {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;   /* distribute items across full width */
+    gap: 0px;                          /* remove extra gaps so 5 fit perfectly */
+    flex-wrap: nowrap;
+    padding: 15px 0;
+    box-sizing: border-box;
+}
+
+.rec-card {
+    background: rgba(0,0,0,0.65);
+    border-radius: 12px;
+    padding: 12px;
+    width: 19%;                        /* Approximately 5 cards fit across (5 * 19% + gaps) */
+    box-shadow: 0 6px 18px rgba(0,0,0,0.6);
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    box-sizing: border-box;
+    min-height: 520px;                 /* keep cards visually consistent height */
+}
+
+.rec-poster {
+    width: 100%;
+    height: 300px;
+    object-fit: cover;
+    border-radius: 8px;
+    margin-bottom: 10px;
+}
+
+.rec-title {
+    font-weight: 700;
+    margin: 6px 0 4px 0;
+    text-align: center;
+    font-size: 1rem;
+}
+
+.rec-meta {
+    font-size: 0.85rem;
+    opacity: 0.92;
+    text-align: center;
+    margin-bottom: 6px;
+}
+
+.rec-overview {
+    font-size: 0.78rem;
+    opacity: 0.9;
+    text-align: left;
+    max-height: 100px;
+    overflow: hidden;
+    width: 100%;
+}
+
+.rec-link {
+    text-decoration: none;
+    color: inherit;
+}
+
+/* Mobile responsive */
+@media (max-width: 1200px) {
+    .rec-card { width: 30%; min-height: 480px; }
+}
+@media (max-width: 900px) {
+    .rec-row {
+        overflow-x: auto;
+        padding-bottom: 8px;
+    }
+    .rec-card {
+        min-width: 200px;
+        width: 200px;
+        flex: 0 0 auto;
+        min-height: 420px;
+    }
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
 def recommend(movie: str):
+    """Return list of 5 recommended titles and poster URLs (best-effort)."""
     if similarity is None or movies is None:
         return [], []
     try:
@@ -319,22 +390,23 @@ def recommend(movie: str):
         movies_list = sorted(list(enumerate(distances)), reverse=True, key=lambda x: x[1])[1:6]
     except Exception:
         return [], []
-    rec_titles, rec_posters = [], []
+
+    rec_titles = []
+    rec_posters = []
     for i in movies_list:
         idx = i[0]
         title = movies.iloc[idx]["title"]
         rec_titles.append(title)
         movie_id = movies.iloc[idx].get("movie_id", None)
         poster = fetch_poster_from_tmdb(movie_id)
+        # if poster returns placeholder, use local fallback
         if poster == PLACEHOLDER:
             poster = LOCAL_FALLBACK_POSTER
         rec_posters.append(poster)
     return rec_titles, rec_posters
 
 
-# --------------------------
-# Recommendation controls + 5-card layout with columns
-# --------------------------
+# Recommendation controls
 selected_movie_name = st.selectbox("Select a movie to get recommendations", movies["title"].values)
 
 if st.button("Recommend"):
@@ -342,9 +414,9 @@ if st.button("Recommend"):
     if not names:
         st.info("No recommendations available.")
     else:
-        # 5 equal-width columns across the page
-        cols_rec = st.columns(5)
-        for idx, (name, col) in enumerate(zip(names, cols_rec)):
+        # Build HTML pieces WITHOUT leading spaces so Markdown doesn't treat as code block
+        card_pieces = ['<div class="rec-row">']
+        for idx, name in enumerate(names):
             rec_movie_id = None
             if "movie_id" in movies.columns and not movies[movies["title"] == name].empty:
                 rec_movie_id = movies[movies["title"] == name]["movie_id"].iloc[0]
@@ -365,7 +437,8 @@ if st.button("Recommend"):
             poster_url = posters[idx] if idx < len(posters) else LOCAL_FALLBACK_POSTER
             trailer_url = fetch_youtube_trailer_url(rec_movie_id, name)
 
-            card_html = dedent(f"""
+            # Use dedent so no leading spaces remain in final HTML
+            card_html = dedent(f"""\
             <div class="rec-card">
                 <a class="rec-link" href="{trailer_url}" target="_blank" rel="noopener noreferrer">
                     <img class="rec-poster" src="{poster_url}" alt="poster">
@@ -376,6 +449,8 @@ if st.button("Recommend"):
                 <div class="rec-overview">{overview_text}</div>
             </div>
             """)
+            card_pieces.append(card_html.strip())
 
-            with col:
-                st.markdown(card_html, unsafe_allow_html=True)
+        card_pieces.append("</div>")
+        cards_html = "\n".join(card_pieces)
+        st.markdown(cards_html, unsafe_allow_html=True)
